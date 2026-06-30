@@ -22,7 +22,40 @@ class BloodRequestViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         blood_group = serializer.validated_data.get('blood_group')
         matching_donors = Donor.objects.filter(blood_group=blood_group, eligible=True, status='active')
-        serializer.save(matched_donors_count=matching_donors.count())
+        
+        # Save the request database record
+        blood_request = serializer.save(matched_donors_count=matching_donors.count())
+
+        # Send alert email notification to admin/client
+        try:
+            from django.conf import settings
+            from api.services.notification import send_real_email
+            
+            admin_emails = [
+                e.strip() for e in getattr(settings, 'ADMIN_NOTIFICATION_EMAIL', 'noreply@vibecopilot.ai').split(',') if e.strip()
+            ]
+            
+            if admin_emails:
+                subject = f"🚨 New Blood Request: {blood_request.blood_group} Required"
+                message = (
+                    f"Hello Admin,\n\n"
+                    f"A new blood request has been submitted on Mumbai Blood Connect:\n\n"
+                    f"Details:\n"
+                    f"- Patient Name: {blood_request.patient_name}\n"
+                    f"- Required Blood Group: {blood_request.blood_group}\n"
+                    f"- Units Needed: {blood_request.units}\n"
+                    f"- Hospital Name: {blood_request.hospital}\n"
+                    f"- Hospital Location: {blood_request.hospital_address}\n"
+                    f"- Urgency Level: {blood_request.urgency.upper()}\n"
+                    f"- Attendant Name: {blood_request.attendant_name}\n"
+                    f"- Mobile Number: {blood_request.phone}\n\n"
+                    f"Please log in to the Admin Dashboard to review and approve this request.\n\n"
+                    f"Best regards,\n"
+                    f"Mumbai Blood Connect System"
+                )
+                send_real_email(subject, message, admin_emails)
+        except Exception as err:
+            print(f"[Error] Failed to send admin email notification: {err}")
 
     @action(detail=True, methods=['post'], url_path='approve')
     def approve_request(self, request, pk=None):

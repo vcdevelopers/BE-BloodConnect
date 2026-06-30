@@ -7,7 +7,10 @@ from rest_framework.decorators import action
 from api.models import BloodBank
 from api.serializers import BloodBankSerializer
 from api.scraper import run_live_scraper
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 
+@method_decorator(csrf_exempt, name='dispatch')
 class BloodBankViewSet(viewsets.ModelViewSet):
     queryset = BloodBank.objects.all()
     serializer_class = BloodBankSerializer
