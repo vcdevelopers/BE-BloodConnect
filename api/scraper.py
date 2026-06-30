@@ -1,3 +1,4 @@
+import threading
 import requests
 import json
 import logging
@@ -5,6 +6,20 @@ from django.utils import timezone
 from api.models import BloodBank
 
 logger = logging.getLogger(__name__)
+
+# Concurrency lock to prevent duplicate concurrent scraping runs
+scraper_lock = threading.Lock()
+
+def safe_int(val):
+    try:
+        if val is None:
+            return 0
+        s = str(val).strip().replace(" ", "")
+        if not s or s.lower() in ("n/a", "na", "null", "none", "-", "."):
+            return 0
+        return int(float(s))
+    except (ValueError, TypeError):
+        return 0
 
 def get_zone_from_pincode_and_district(pincode_str, district, name_str=""):
     # Normalize district name
@@ -31,7 +46,6 @@ def get_zone_from_pincode_and_district(pincode_str, district, name_str=""):
             
         # Palghar pincodes
         if 401100 <= pin <= 401699:
-            # 401107 is Bhayandar (Thane district), but 401201 is Vasai (Palghar district)
             if pin in {401101, 401102, 401103, 401104, 401105, 401106, 401107}:
                 return "Thane"
             return "Palghar"
@@ -45,7 +59,7 @@ def get_zone_from_pincode_and_district(pincode_str, district, name_str=""):
             return "Mumbai Suburban"
             
     # Fallback keyword matching on name/location if pincode is missing or out of standard ranges
-    name_lower = name_str.lower()
+    name_lower = str(name_str or "").lower()
     
     # Mumbai City keywords
     city_keywords = [
@@ -73,126 +87,147 @@ def get_zone_from_pincode_and_district(pincode_str, district, name_str=""):
 
 
 def run_live_scraper():
-    print("[Scraper] Starting live blood stock sync...")
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    })
-
-    view_url = "https://bloodcenter.mahasbtc.org/api/v1/consolidated-api/view?defaultPageId=64f1f1e1f5afeb2a04416ee7"
-    headers_view = {
-        "Referer": "https://bloodcenter.mahasbtc.org/applications/64f1f1e1f5afeb2a04416ee4/pages/64f1f1e1f5afeb2a04416ee7?embed=true",
-        "Origin": "https://bloodcenter.mahasbtc.org"
-    }
-    
-    try:
-        response = session.get(view_url, headers=headers_view, timeout=20)
-        response.raise_for_status()
-    except Exception as e:
-        logger.error(f"[Scraper] Failed to establish session: {e}")
-        return False
-
-    xsrf_token = session.cookies.get("XSRF-TOKEN")
-    if not xsrf_token:
-        logger.error("[Scraper] XSRF-TOKEN cookie not found.")
-        return False
-
-    execute_url = "https://bloodcenter.mahasbtc.org/api/v1/actions/execute"
-    headers_execute = {
-        "x-appsmith-version": "v1.99",
-        "x-appsmith-environmentid": "unused_env",
-        "x-xsrf-token": xsrf_token,
-        "Referer": "https://bloodcenter.mahasbtc.org/applications/64f1f1e1f5afeb2a04416ee4/pages/64f1f1e1f5afeb2a04416ee7?embed=true",
-        "Origin": "https://bloodcenter.mahasbtc.org",
-    }
-    
-    payload = {
-        "executeActionDTO": (
-            '{"actionId":"64f1f1e1f5afeb2a04416eeb",'
-            '"viewMode":true,'
-            '"paramProperties":{},'
-            '"analyticsProperties":{"isUserInitiated":false}}'
-        )
-    }
+    # Attempt to acquire lock. If already running, skip to prevent SQLite database locks
+    if not scraper_lock.acquire(blocking=False):
+        print("[Scraper] Scraper is already running. Skipping this run to prevent database locks.")
+        return True
 
     try:
-        res = session.post(execute_url, headers=headers_execute, files=payload, timeout=30)
-        res.raise_for_status()
-        api_data = res.json()
-    except Exception as e:
-        logger.error(f"[Scraper] Failed execute: {e}")
-        return False
+        print("[Scraper] Starting live blood stock sync...")
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        })
 
-    body = api_data.get("data", {}).get("body", [])
-    if not body:
-        logger.error("[Scraper] Body is empty.")
-        return False
-
-    mumbai_districts = {"Mumbai", "Thane", "Palghar"}
-    saved_count = 0
-    
-    for record in body:
-        district = record.get("district", "")
-        if district not in mumbai_districts:
-            continue
-            
-        bb_id = record.get("username") or record.get("bloodbank")
-        if not bb_id:
-            continue
-            
-        name = record.get("name", "Unknown Blood Bank")
-        pincode = str(record.get("pincode", "") or "").replace(" ", "").strip()
-        zone = get_zone_from_pincode_and_district(pincode, district, name)
+        view_url = "https://bloodcenter.mahasbtc.org/api/v1/consolidated-api/view?defaultPageId=64f1f1e1f5afeb2a04416ee7"
+        headers_view = {
+            "Referer": "https://bloodcenter.mahasbtc.org/applications/64f1f1e1f5afeb2a04416ee4/pages/64f1f1e1f5afeb2a04416ee7?embed=true",
+            "Origin": "https://bloodcenter.mahasbtc.org"
+        }
         
-        clean_pin = "".join([c for c in str(pincode) if c.isdigit()])
-        p_suffix = clean_pin[-4:] if len(clean_pin) >= 4 else "1234"
-        contact_no = f"+91 22 6155 {p_suffix}"
-        location = record.get("location") or f"{name.split(',')[0]}, {district}"
+        try:
+            response = session.get(view_url, headers=headers_view, timeout=25)
+            response.raise_for_status()
+        except Exception as e:
+            logger.error(f"[Scraper] Failed to establish session: {e}")
+            return False
 
-        defaults = {
-            'name': name,
-            'location': location,
-            'zone': zone,
-            'contact': contact_no,
-            'pincode': pincode,
-            'district': district,
-            'timestamp': record.get("timestamp", ""),
-            
-            'wb_a_pos': int(record.get('wb_a_pos', 0) or 0),
-            'wb_a_neg': int(record.get('wb_a_neg', 0) or 0),
-            'wb_b_pos': int(record.get('wb_b_pos', 0) or 0),
-            'wb_b_neg': int(record.get('wb_b_neg', 0) or 0),
-            'wb_ab_pos': int(record.get('wb_ab_pos', 0) or 0),
-            'wb_ab_neg': int(record.get('wb_ab_neg', 0) or 0),
-            'wb_o_pos': int(record.get('wb_o_pos', 0) or 0),
-            'wb_o_neg': int(record.get('wb_o_neg', 0) or 0),
-            
-            'prbc_a_pos': int(record.get('prbc_a_pos', 0) or 0),
-            'prbc_a_neg': int(record.get('prbc_a_neg', 0) or 0),
-            'prbc_b_pos': int(record.get('prbc_b_pos', 0) or 0),
-            'prbc_b_neg': int(record.get('prbc_b_neg', 0) or 0),
-            'prbc_ab_pos': int(record.get('prbc_ab_pos', 0) or 0),
-            'prbc_ab_neg': int(record.get('prbc_ab_neg', 0) or 0),
-            'prbc_o_pos': int(record.get('prbc_o_pos', 0) or 0),
-            'prbc_o_neg': int(record.get('prbc_o_neg', 0) or 0),
-            
-            'total_units': int(record.get('total_units', 0) or 0),
-            'bombay_pos': int(record.get('bombay_pos', 0) or 0),
-            'bombay_neg': int(record.get('bombay_neg', 0) or 0),
-            'sd_platelets': int(record.get('sd_platelets', 0) or 0),
-            'sd_plasma': int(record.get('sd_plasma', 0) or 0),
-            'ffp': int(record.get('ffp', 0) or 0),
-            'cryo_pp': int(record.get('cryo_pp', 0) or 0),
-            'liquid_plasma': int(record.get('liquid_plasma', 0) or 0),
-            'rdp': int(record.get('rdp', 0) or 0),
-            'cryo_pre': int(record.get('cryo_pre', 0) or 0),
+        xsrf_token = session.cookies.get("XSRF-TOKEN")
+        if not xsrf_token:
+            logger.error("[Scraper] XSRF-TOKEN cookie not found.")
+            return False
+
+        execute_url = "https://bloodcenter.mahasbtc.org/api/v1/actions/execute"
+        headers_execute = {
+            "x-appsmith-version": "v1.99",
+            "x-appsmith-environmentid": "unused_env",
+            "x-xsrf-token": xsrf_token,
+            "Referer": "https://bloodcenter.mahasbtc.org/applications/64f1f1e1f5afeb2a04416ee4/pages/64f1f1e1f5afeb2a04416ee7?embed=true",
+            "Origin": "https://bloodcenter.mahasbtc.org",
+        }
+        
+        payload = {
+            "executeActionDTO": (
+                '{"actionId":"64f1f1e1f5afeb2a04416eeb",'
+                '"viewMode":true,'
+                '"paramProperties":{},'
+                '"analyticsProperties":{"isUserInitiated":false}}'
+            )
         }
 
         try:
-            BloodBank.objects.update_or_create(id=bb_id, defaults=defaults)
-            saved_count += 1
-        except Exception as ex:
-            logger.error(f"[Scraper] Failed to save {name}: {ex}")
+            res = session.post(execute_url, headers=headers_execute, files=payload, timeout=30)
+            res.raise_for_status()
+            api_data = res.json()
+        except Exception as e:
+            logger.error(f"[Scraper] Failed execute: {e}")
+            return False
 
-    print(f"[Scraper] Successfully synchronized {saved_count} blood banks in Mumbai region.")
-    return True
+        body = []
+        if isinstance(api_data, dict):
+            data_field = api_data.get("data")
+            if isinstance(data_field, dict):
+                body = data_field.get("body", [])
+
+        if not isinstance(body, list) or not body:
+            logger.error("[Scraper] Body is empty or invalid format.")
+            return False
+
+        mumbai_districts = {"Mumbai", "Thane", "Palghar"}
+        saved_count = 0
+        
+        for record in body:
+            if not isinstance(record, dict):
+                continue
+
+            district = record.get("district", "")
+            if district not in mumbai_districts:
+                continue
+                
+            bb_id = record.get("username") or record.get("bloodbank")
+            if not bb_id:
+                continue
+                
+            name = str(record.get("name") or "Unknown Blood Bank").strip()
+            if name == "Kokilaben Dhibhai Ambani Blood Bank":
+                name = "Kokilaben Dhirubhai Ambani Blood Bank"
+            pincode = str(record.get("pincode", "") or "").replace(" ", "").strip()
+            zone = get_zone_from_pincode_and_district(pincode, district, name)
+            
+            clean_pin = "".join([c for c in str(pincode) if c.isdigit()])
+            p_suffix = clean_pin[-4:] if len(clean_pin) >= 4 else "1234"
+            contact_no = f"+91 22 6155 {p_suffix}"
+            location = record.get("location") or f"{name.split(',')[0]}, {district}"
+
+            defaults = {
+                'name': name,
+                'location': location,
+                'zone': zone,
+                'contact': contact_no,
+                'pincode': pincode,
+                'district': district,
+                'timestamp': record.get("timestamp", ""),
+                
+                'wb_a_pos': safe_int(record.get('wb_a_pos')),
+                'wb_a_neg': safe_int(record.get('wb_a_neg')),
+                'wb_b_pos': safe_int(record.get('wb_b_pos')),
+                'wb_b_neg': safe_int(record.get('wb_b_neg')),
+                'wb_ab_pos': safe_int(record.get('wb_ab_pos')),
+                'wb_ab_neg': safe_int(record.get('wb_ab_neg')),
+                'wb_o_pos': safe_int(record.get('wb_o_pos')),
+                'wb_o_neg': safe_int(record.get('wb_o_neg')),
+                
+                'prbc_a_pos': safe_int(record.get('prbc_a_pos')),
+                'prbc_a_neg': safe_int(record.get('prbc_a_neg')),
+                'prbc_b_pos': safe_int(record.get('prbc_b_pos')),
+                'prbc_b_neg': safe_int(record.get('prbc_b_neg')),
+                'prbc_ab_pos': safe_int(record.get('prbc_ab_pos')),
+                'prbc_ab_neg': safe_int(record.get('prbc_ab_neg')),
+                'prbc_o_pos': safe_int(record.get('prbc_o_pos')),
+                'prbc_o_neg': safe_int(record.get('prbc_o_neg')),
+                
+                'total_units': safe_int(record.get('total_units')),
+                'bombay_pos': safe_int(record.get('bombay_pos')),
+                'bombay_neg': safe_int(record.get('bombay_neg')),
+                'sd_platelets': safe_int(record.get('sd_platelets')),
+                'sd_plasma': safe_int(record.get('sd_plasma')),
+                'ffp': safe_int(record.get('ffp')),
+                'cryo_pp': safe_int(record.get('cryo_pp')),
+                'liquid_plasma': safe_int(record.get('liquid_plasma')),
+                'rdp': safe_int(record.get('rdp')),
+                'cryo_pre': safe_int(record.get('cryo_pre')),
+            }
+
+            try:
+                BloodBank.objects.update_or_create(id=bb_id, defaults=defaults)
+                saved_count += 1
+            except Exception as ex:
+                logger.error(f"[Scraper] Failed to save {name}: {ex}")
+
+        print(f"[Scraper] Successfully synchronized {saved_count} blood banks in Mumbai region.")
+        return True
+    except Exception as e:
+        logger.error(f"[Scraper] Unhandled exception during scrape: {e}")
+        return False
+    finally:
+        scraper_lock.release()

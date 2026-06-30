@@ -1,6 +1,17 @@
 from pathlib import Path
+import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load environment variables from .env file
+for env_file in [BASE_DIR / '.env', BASE_DIR.parent / '.env']:
+    if env_file.exists():
+        with open(env_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, val = line.split('=', 1)
+                    os.environ[key.strip()] = val.strip()
 
 SECRET_KEY = 'django-insecure-0!n91a73$w)eqium!1eaw+$$rzod(c@w!7x!-nl-8sa5m^47(b'
 
@@ -90,3 +101,21 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.AllowAny',
     ]
 }
+
+# Email Configuration
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+DEFAULT_FROM_EMAIL = os.environ.get('EMAIL_HOST_USER', 'noreply@vibecopilot.ai')
+
+
+# Route Mobile SMS Configuration
+ROUTE_MOBILE_USERNAME = os.environ.get('ROUTE_MOBILE_USERNAME', '')
+ROUTE_MOBILE_PASSWORD = os.environ.get('ROUTE_MOBILE_PASSWORD', '')
+ROUTE_MOBILE_SENDER_ID = os.environ.get('ROUTE_MOBILE_SENDER_ID', 'MUMBBC')
+ROUTE_MOBILE_ENTITY_ID = os.environ.get('ROUTE_MOBILE_ENTITY_ID', '')
+ROUTE_MOBILE_TM_ID = os.environ.get('ROUTE_MOBILE_TM_ID', '')
+ROUTE_MOBILE_API_URL = os.environ.get('ROUTE_MOBILE_API_URL', 'https://sms6.rmlconnect.net:8443/bulksms/bulksms')

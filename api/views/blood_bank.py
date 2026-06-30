@@ -53,7 +53,10 @@ class BloodBankViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='refresh')
     def refresh_data(self, request):
-        success = run_live_scraper()
-        if success:
-            return Response({"status": "success", "message": "Synced successfully."}, status=status.HTTP_200_OK)
-        return Response({"status": "error", "message": "Failed."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        # Run scraper in a background thread so the HTTP request returns immediately
+        # and doesn't time out or block the client.
+        threading.Thread(target=run_live_scraper).start()
+        return Response({
+            "status": "success", 
+            "message": "Sync started in the background. The stock list will refresh automatically in a few seconds."
+        }, status=status.HTTP_202_ACCEPTED)

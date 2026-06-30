@@ -33,8 +33,31 @@ class BloodRequestViewSet(viewsets.ModelViewSet):
         blood_request.matched_donors_count = matching_donors.count()
         blood_request.save()
         
+        # Dispatch emails to all matching active eligible donors
+        from api.services.notification import send_real_email
+        recipient_emails = [d.email for d in matching_donors if d.email]
+        
+        if recipient_emails:
+            subject = f"EMERGENCY: {blood_request.blood_group} Blood Required"
+            message = (
+                f"Emergency Blood Request Alert!\n\n"
+                f"An urgent request for {blood_request.blood_group} blood has been approved near you.\n\n"
+                f"Request Details:\n"
+                f"- Patient: {blood_request.patient_name}\n"
+                f"- Required Units: {blood_request.units}\n"
+                f"- Hospital: {blood_request.hospital}\n"
+                f"- Location Address: {blood_request.hospital_address}\n"
+                f"- Urgency Level: {blood_request.urgency.upper()}\n"
+                f"- Attendant/Contact Person: {blood_request.attendant_name} (Phone: {blood_request.phone})\n\n"
+                f"If you are eligible and can donate, please contact the attendant directly to save a life.\n\n"
+                f"Best regards,\n"
+                f"Mumbai Blood Connect Team"
+            )
+            # Send alert email
+            send_real_email(subject, message, recipient_emails)
+        
         return Response({
             "status": "success", 
-            "message": f"Approved. Matched with {blood_request.matched_donors_count} donors.",
+            "message": f"Approved. Matched and alerted {len(recipient_emails)} donors via email.",
             "matched_donors": blood_request.matched_donors_count
         }, status=status.HTTP_200_OK)

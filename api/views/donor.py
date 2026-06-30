@@ -16,3 +16,19 @@ class DonorViewSet(viewsets.ModelViewSet):
         if blood_group:
             queryset = queryset.filter(blood_group__iexact=blood_group)
         return queryset
+
+    def perform_create(self, serializer):
+        donor = serializer.save()
+        if donor.email:
+            subject = "Welcome to Mumbai Blood Connect - Donor Registration Successful"
+            message = (
+                f"Dear {donor.name},\n\n"
+                f"Thank you for registering as a blood donor on Mumbai Blood Connect. "
+                f"Your account is registered under the '{donor.blood_group}' blood group in the '{donor.zone}' area.\n\n"
+                f"In case of an emergency requirement for your blood group, you will receive an alert from us.\n\n"
+                f"Thank you for helping us save lives.\n\n"
+                f"Best regards,\n"
+                f"Mumbai Blood Connect Team"
+            )
+            from api.services.notification import send_real_email
+            send_real_email(subject, message, [donor.email])
