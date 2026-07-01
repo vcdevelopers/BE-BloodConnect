@@ -3,7 +3,10 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from api.models import Camp
 from api.serializers import CampSerializer
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 
+@method_decorator(csrf_exempt, name='dispatch')
 class CampViewSet(viewsets.ModelViewSet):
     queryset = Camp.objects.all().order_by('date')
     serializer_class = CampSerializer

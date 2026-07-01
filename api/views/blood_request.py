@@ -3,7 +3,10 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from api.models import BloodRequest, Donor
 from api.serializers import BloodRequestSerializer
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 
+@method_decorator(csrf_exempt, name='dispatch')
 class BloodRequestViewSet(viewsets.ModelViewSet):
     queryset = BloodRequest.objects.all().order_by('-id')
     serializer_class = BloodRequestSerializer

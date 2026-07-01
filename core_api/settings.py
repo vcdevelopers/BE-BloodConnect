@@ -110,7 +110,7 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('EMAIL_HOST_USER', 'noreply@vibecopilot.ai')
-ADMIN_NOTIFICATION_EMAIL = os.environ.get('ADMIN_NOTIFICATION_EMAIL', 'noreply@vibecopilot.ai')
+ADMIN_NOTIFICATION_EMAIL = os.environ.get('ADMIN_NOTIFICATION_EMAIL', 'mumbaibloodtracker@gmail.com')
 
 
 # Route Mobile SMS Configuration
@@ -120,3 +120,5 @@ ROUTE_MOBILE_SENDER_ID = os.environ.get('ROUTE_MOBILE_SENDER_ID', 'MUMBBC')
 ROUTE_MOBILE_ENTITY_ID = os.environ.get('ROUTE_MOBILE_ENTITY_ID', '')
 ROUTE_MOBILE_TM_ID = os.environ.get('ROUTE_MOBILE_TM_ID', '')
 ROUTE_MOBILE_API_URL = os.environ.get('ROUTE_MOBILE_API_URL', 'https://sms6.rmlconnect.net:8443/bulksms/bulksms')
+
+# Auto-reload trigger comment to refresh environment variables
